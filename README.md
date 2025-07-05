@@ -1,8 +1,6 @@
 # DocNav MCP Server
 
-A Model Context Protocol (MCP) server designed to help LLMs read, process, and navigate long-form documents with intelligent analysis and navigation capabilities.
-
-
+DocNav is a Model Context Protocol (MCP) server which empowers LLM Agents to read, analyze, and manage lengthy documents intelligently, mimicking human-like comprehension and navigation capabilities.
 
 ## Features
 
@@ -26,7 +24,7 @@ DocNav follows a modular, extensible architecture:
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.10+
 - [uv](https://github.com/astral-sh/uv) package manager
 
 ### Setup
@@ -42,17 +40,29 @@ cd DocNav-MCP
 uv sync
 ```
 
-3. Run tests:
-```bash
-uv run --frozen pytest
-```
 
 ## Usage
 
 ### Starting the MCP Server
 
 ```bash
-uv run python -m docnav.server
+uv run server.py
+```
+
+### Connect to the MCP server
+
+```json
+{
+  "mcpServers": {
+    "docnav": {
+      "command": "{{PATH_TO_UV}}", // Run `which uv` and place the output here
+      "args": [
+        "run",
+        "server.py"
+      ]
+    }
+  }
+}
 ```
 
 ### Available Tools
@@ -61,7 +71,7 @@ The server provides the following MCP tools:
 
 - `load_document`: Load and process a document for navigation
 - `get_outline`: Get the document outline/table of contents
-- `get_section`: Retrieve content from a specific document section
+- `read_section`: Retrieve content from a specific document section
 - `search_document`: Search for content within a document
 
 ### Example Usage
@@ -71,13 +81,13 @@ The server provides the following MCP tools:
 result = await tools.load_document("path/to/document.md")
 
 # Get document outline
-outline = await tools.get_outline("path/to/document.md")
+outline = await tools.get_outline(doc_id)
 
 # Get specific section content
-section = await tools.get_section("path/to/document.md", "section_id")
+section = await tools.read_section(doc_id, section_id)
 
 # Search within document
-results = await tools.search_document("path/to/document.md", "search query")
+results = await tools.search_document(doc_id, "search query")
 ```
 
 ## Development
@@ -86,12 +96,11 @@ results = await tools.search_document("path/to/document.md", "search query")
 
 ```
 docnav-mcp/
+--- server.py             # Main MCP server
 --- docnav/
 ------- __init__.py           # Package initialization
-------- server.py             # Main MCP server
 ------- models.py             # Data models
 ------- navigator.py          # Document navigation engine
-------- tools.py              # MCP tools implementation
 ------- processors/
 ------- __init__.py       # Processor package
 ------- base.py           # Base processor interface
@@ -120,13 +129,7 @@ See [CLAUDE.md](./CLAUDE.md) for detailed development guidelines including:
 
 ```bash
 # Run all tests
-uv run --frozen pytest
-
-# Run with coverage
-uv run --frozen pytest --cov=docnav
-
-# Run specific test file
-uv run --frozen pytest tests/test_processors.py
+uv run tests/run_tests.py
 ```
 
 ### Code Quality
@@ -144,13 +147,15 @@ uv run --frozen pyright
 
 ## Roadmap
 
-- [ ] Complete Markdown processor implementation
+- [x] Complete Markdown processor implementation
 - [ ] Add PDF document support
+- [ ] Improve test coverage and quality
 - [ ] Implement advanced search capabilities
 - [ ] Add document summarization features
 - [ ] Support for additional document formats (DOCX, TXT, etc.)
 - [ ] Performance optimizations for large documents
 - [ ] Caching mechanisms for frequently accessed documents
+- [ ] Add persistent storage for loaded documents
 
 ## Contributing
 
