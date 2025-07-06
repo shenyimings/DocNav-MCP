@@ -1,11 +1,8 @@
 """Main MCP server implementation for DocNav."""
 
-import asyncio
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import Resource, Tool
 
 from docnav.navigator import DocumentNavigator
 
@@ -40,7 +37,7 @@ def load_document(file_path: str) -> str:
             return f"Error: File not found: {file_path}"
 
         # Use the synchronous version to avoid event loop conflicts
-        doc_id, compass = navigator.load_document_from_file_sync(path)
+        doc_id, document = navigator.load_document_from_file_sync(path)
 
         metadata = navigator.get_document_metadata(doc_id)
         return (
@@ -126,11 +123,11 @@ def list_documents() -> str:
 
     output = "Loaded documents:\n"
     for doc in documents:
-        compass = navigator.get_document(doc["id"])
+        document = navigator.get_document(doc["id"])
         headings_count = 0
-        if compass:
+        if document and document.index:
             headings = [
-                node for node in compass.index.values() if node.type == "heading"
+                node for node in document.index.values() if node.type == "heading"
             ]
             headings_count = len(headings)
 
@@ -153,15 +150,20 @@ def get_document_stats(doc_id: str) -> str:
     Returns:
         Document statistics and structure info
     """
-    compass = navigator.get_document(doc_id)
-    if not compass:
+    document = navigator.get_document(doc_id)
+    if not document:
         return f"Document '{doc_id}' not found"
 
-    headings = [node for node in compass.index.values() if node.type == "heading"]
-    paragraphs = [node for node in compass.index.values() if node.type == "paragraph"]
+    headings = []
+    paragraphs = []
+    if document.index:
+        headings = [node for node in document.index.values() if node.type == "heading"]
+        paragraphs = [
+            node for node in document.index.values() if node.type == "paragraph"
+        ]
 
     stats = f"Document: {doc_id}\n"
-    stats += f"Total nodes: {len(compass.index)}\n"
+    stats += f"Total nodes: {len(document.index) if document.index else 0}\n"
     stats += f"Headings: {len(headings)}\n"
     stats += f"Paragraphs: {len(paragraphs)}\n"
 

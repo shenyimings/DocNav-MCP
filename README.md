@@ -57,6 +57,8 @@ uv run server.py
     "docnav": {
       "command": "{{PATH_TO_UV}}", // Run `which uv` and place the output here
       "args": [
+        "--directory",
+        "{{PATH_TO_SRC}}",
         "run",
         "server.py"
       ]
@@ -148,8 +150,8 @@ uv run --frozen pyright
 ## Roadmap
 
 - [x] Complete Markdown processor implementation
-- [ ] Add PDF document support
-- [ ] Improve test coverage and quality
+- [x] Add PDF document support (PyMuPDF)
+- [x] Improve test coverage and quality
 - [ ] Implement advanced search capabilities
 - [ ] Add document summarization features
 - [ ] Support for additional document formats (DOCX, TXT, etc.)
@@ -167,7 +169,7 @@ uv run --frozen pyright
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the Apache-2.0 License - see the LICENSE file for details.
 
 ## Support
 

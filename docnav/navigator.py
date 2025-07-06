@@ -1,6 +1,5 @@
 """Document navigation engine - DOM-like tree structure approach."""
 
-import re
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -8,9 +7,9 @@ from xml.etree import ElementTree as ET
 
 import tiktoken
 from markdown_it import MarkdownIt
-from markdown_it.token import Token
 
 from .models import Document, DocumentNode, NavigationContext, SearchResult
+from .processors import MarkdownProcessor, PDFProcessor
 
 
 class DocumentCompass:
@@ -433,14 +432,28 @@ class DocumentNavigator:
 
     def __init__(self) -> None:
         """Initialize the document navigator."""
-        self.loaded_documents: Dict[str, DocumentCompass] = {}
-        self.document_metadata: Dict[str, Dict[str, str]] = (
-            {}
-        )  # Store metadata by doc_id
+        self.loaded_documents: Dict[str, Document] = {}
+        self.document_metadata: Dict[
+            str, Dict[str, str]
+        ] = {}  # Store metadata by doc_id
+
+        # Initialize processors
+        self.processors = [
+            MarkdownProcessor(),
+            PDFProcessor(),
+        ]
 
     def _generate_doc_id(self) -> str:
         """Generate a unique document ID using UUID."""
         return str(uuid.uuid4())
+
+    def _find_processor(self, file_path: Path):
+        """Find the appropriate processor for a file."""
+        for processor in self.processors:
+            if processor.can_process(file_path):
+                return processor
+        # Default to markdown processor if no specific processor found
+        return self.processors[0]  # MarkdownProcessor
 
     def _normalize_file_path(self, file_path: Path) -> str:
         """Normalize file path to prevent path injection and ensure consistency."""
@@ -453,7 +466,7 @@ class DocumentNavigator:
 
     def load_document_from_text_sync(
         self, content: str, format: str = "markdown", title: Optional[str] = None
-    ) -> Tuple[str, DocumentCompass]:
+    ) -> Tuple[str, Document]:
         """Load document from text content (synchronous version).
 
         Args:
@@ -462,12 +475,38 @@ class DocumentNavigator:
             title: Optional document title
 
         Returns:
-            Tuple of (doc_id, DocumentCompass) where doc_id is auto-generated UUID
+            Tuple of (doc_id, Document) where doc_id is auto-generated UUID
         """
         try:
+            # For sync version, use the old DocumentCompass approach for text
+            # since we can't await in sync methods
             doc_id = self._generate_doc_id()
-            compass = DocumentCompass(content, format)
-            self.loaded_documents[doc_id] = compass
+
+            # Create a Document object manually for text content
+            from .models import Document, DocumentNode
+
+            document = Document(
+                file_path=None,
+                title=title or "Untitled Document",
+                source_text=content,
+                source_format=format,
+            )
+
+            # Create simple document structure for text
+            if format == "markdown":
+                # Use the old DocumentCompass for parsing markdown text
+                compass = DocumentCompass(content, format)
+                # Convert compass structure to Document structure
+                document.root = compass.root
+                document.rebuild_index()
+            else:
+                # For other formats, create a simple root node
+                root = DocumentNode(type="document", id="root")
+                root.content = content
+                document.root = root
+                document.rebuild_index()
+
+            self.loaded_documents[doc_id] = document
 
             # Store metadata
             self.document_metadata[doc_id] = {
@@ -477,13 +516,14 @@ class DocumentNavigator:
                 "created_at": str(uuid.uuid1().time),
             }
 
-            return doc_id, compass
+            return doc_id, document
+
         except Exception as e:
             raise ValueError(f"Error loading document: {str(e)}")
 
     async def load_document_from_text(
         self, content: str, format: str = "markdown", title: Optional[str] = None
-    ) -> Tuple[str, DocumentCompass]:
+    ) -> Tuple[str, Document]:
         """Load document from text content.
 
         Args:
@@ -492,21 +532,59 @@ class DocumentNavigator:
             title: Optional document title
 
         Returns:
-            Tuple of (doc_id, DocumentCompass) where doc_id is auto-generated UUID
+            Tuple of (doc_id, Document) where doc_id is auto-generated UUID
         """
-        # Just call the sync version since there's no actual async work
-        return self.load_document_from_text_sync(content, format, title)
+        try:
+            # Create a temporary file to use with processors
+            import tempfile
 
-    def load_document_from_file_sync(
-        self, file_path: Path
-    ) -> Tuple[str, DocumentCompass]:
+            # Determine file extension based on format
+            ext_map = {"markdown": ".md", "xml": ".xml", "pdf": ".pdf"}
+            ext = ext_map.get(format, ".md")
+
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=ext, delete=False, encoding="utf-8"
+            ) as f:
+                f.write(content)
+                temp_path = Path(f.name)
+
+            try:
+                # Find appropriate processor
+                processor = self._find_processor(temp_path)
+
+                # Process the document
+                document = await processor.process(temp_path)
+                doc_id = self._generate_doc_id()
+
+                # Update document metadata
+                document.title = title or "Untitled Document"
+
+                self.loaded_documents[doc_id] = document
+
+                # Store metadata
+                self.document_metadata[doc_id] = {
+                    "title": title or "Untitled Document",
+                    "format": format,
+                    "source_type": "text",
+                    "created_at": str(uuid.uuid1().time),
+                }
+
+                return doc_id, document
+            finally:
+                # Clean up temporary file
+                temp_path.unlink()
+
+        except Exception as e:
+            raise ValueError(f"Error loading document: {str(e)}")
+
+    def load_document_from_file_sync(self, file_path: Path) -> Tuple[str, Document]:
         """Load document from file (synchronous version).
 
         Args:
             file_path: Path to the document file
 
         Returns:
-            Tuple of (doc_id, DocumentCompass) where doc_id is auto-generated UUID
+            Tuple of (doc_id, Document) where doc_id is auto-generated UUID
         """
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -514,56 +592,181 @@ class DocumentNavigator:
         # Normalize path to prevent injection issues
         normalized_path = self._normalize_file_path(file_path)
 
-        # Determine format from file extension
+        try:
+            # Check if we're in an async context (like MCP server)
+            import asyncio
+
+            try:
+                # Try to get the running event loop
+                asyncio.get_running_loop()
+                # If we get here, we're in an async context
+                # Fall back to sync processing immediately
+                return self._load_file_fallback_sync(file_path)
+            except RuntimeError:
+                # No running event loop, we can use asyncio.run
+                processor = self._find_processor(file_path)
+                document = asyncio.run(processor.process(file_path))
+
+                doc_id = self._generate_doc_id()
+                self.loaded_documents[doc_id] = document
+
+                # Store metadata with normalized path
+                self.document_metadata[doc_id] = {
+                    "title": file_path.name,
+                    "format": document.source_format,
+                    "source_type": "file",
+                    "file_path": normalized_path,
+                    "created_at": str(uuid.uuid1().time),
+                }
+
+                return doc_id, document
+
+        except Exception as e:
+            # For any error, fall back to sync processing
+            try:
+                return self._load_file_fallback_sync(file_path)
+            except Exception as fallback_error:
+                raise ValueError(
+                    f"Error loading document: {str(e)}. Fallback also failed: {str(fallback_error)}"
+                )
+
+    def _load_file_fallback_sync(self, file_path: Path) -> Tuple[str, Document]:
+        """Fallback sync file loading for when async processors can't be used."""
+        normalized_path = self._normalize_file_path(file_path)
+
+        # Handle PDF files directly with pymupdf4llm (which is actually sync)
+        if file_path.suffix.lower() == ".pdf":
+            try:
+                import pymupdf4llm
+
+                # Convert PDF to markdown using pymupdf4llm (this is actually synchronous)
+                markdown_content = pymupdf4llm.to_markdown(str(file_path))
+
+                # Create Document object
+                from .models import Document
+
+                document = Document(
+                    file_path=file_path,
+                    title=file_path.stem,
+                    source_text=markdown_content,
+                    source_format="pdf",
+                )
+
+                # Use markdown processor to parse the converted content
+                # Create temporary file for processing
+                import tempfile
+
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".md", delete=False, encoding="utf-8"
+                ) as f:
+                    f.write(markdown_content)
+                    temp_path = Path(f.name)
+
+                try:
+                    # Use the markdown processor synchronously by creating a simple parser
+                    from .processors.markdown import MarkdownProcessor
+
+                    md_processor = MarkdownProcessor()
+
+                    # Parse using the internal parsing method directly
+                    root = md_processor._parse_markdown_to_tree(markdown_content)
+                    document.root = root
+                    document.rebuild_index()
+
+                finally:
+                    temp_path.unlink()  # Clean up
+
+                # Generate doc ID and store
+                doc_id = self._generate_doc_id()
+                self.loaded_documents[doc_id] = document
+
+                # Store metadata
+                self.document_metadata[doc_id] = {
+                    "title": file_path.name,
+                    "format": "pdf",
+                    "source_type": "file",
+                    "file_path": normalized_path,
+                    "created_at": str(uuid.uuid1().time),
+                }
+
+                return doc_id, document
+
+            except ImportError:
+                raise ValueError(
+                    "pymupdf4llm is required for PDF processing but not available"
+                )
+            except Exception as e:
+                raise ValueError(f"Error processing PDF file: {str(e)}")
+
+        # For markdown and other text files
+        content = file_path.read_text(encoding="utf-8")
         format_map = {
             ".md": "markdown",
             ".markdown": "markdown",
             ".xml": "xml",
         }
-
         file_format = format_map.get(file_path.suffix.lower(), "markdown")
 
-        try:
-            content = file_path.read_text(encoding="utf-8")
-            doc_id = self._generate_doc_id()
-            compass = DocumentCompass(content, file_format)
-            self.loaded_documents[doc_id] = compass
+        # Use the sync text loading method
+        doc_id, document = self.load_document_from_text_sync(
+            content, file_format, file_path.stem
+        )
 
-            # Store metadata with normalized path
-            self.document_metadata[doc_id] = {
-                "title": file_path.name,
-                "format": file_format,
+        # Update metadata to reflect file source
+        self.document_metadata[doc_id].update(
+            {
                 "source_type": "file",
                 "file_path": normalized_path,
-                "created_at": str(uuid.uuid1().time),
             }
+        )
 
-            return doc_id, compass
-        except Exception as e:
-            raise ValueError(f"Error loading document: {str(e)}")
+        return doc_id, document
 
-    async def load_document_from_file(
-        self, file_path: Path
-    ) -> Tuple[str, DocumentCompass]:
+    async def load_document_from_file(self, file_path: Path) -> Tuple[str, Document]:
         """Load document from file.
 
         Args:
             file_path: Path to the document file
 
         Returns:
-            Tuple of (doc_id, DocumentCompass) where doc_id is auto-generated UUID
+            Tuple of (doc_id, Document) where doc_id is auto-generated UUID
         """
-        # Just call the sync version since there's no actual async work
-        return self.load_document_from_file_sync(file_path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
 
-    def get_document(self, doc_id: str) -> Optional[DocumentCompass]:
+        # Normalize path to prevent injection issues
+        normalized_path = self._normalize_file_path(file_path)
+
+        try:
+            # Find appropriate processor for this file type
+            processor = self._find_processor(file_path)
+
+            # Process the document
+            document = await processor.process(file_path)
+            doc_id = self._generate_doc_id()
+            self.loaded_documents[doc_id] = document
+
+            # Store metadata with normalized path
+            self.document_metadata[doc_id] = {
+                "title": file_path.name,
+                "format": document.source_format,
+                "source_type": "file",
+                "file_path": normalized_path,
+                "created_at": str(uuid.uuid1().time),
+            }
+
+            return doc_id, document
+        except Exception as e:
+            raise ValueError(f"Error loading document: {str(e)}")
+
+    def get_document(self, doc_id: str) -> Optional[Document]:
         """Get loaded document by ID.
 
         Args:
             doc_id: UUID-based document identifier
 
         Returns:
-            DocumentCompass instance or None if not found
+            Document instance or None if not found
         """
         # Validate doc_id format to prevent injection
         try:
@@ -623,25 +826,89 @@ class DocumentNavigator:
 
     def get_outline(self, doc_id: str, max_depth: int = 3) -> str:
         """Get document outline."""
-        compass = self.get_document(doc_id)
-        if not compass:
+        document = self.get_document(doc_id)
+        if not document:
             return f"Document '{doc_id}' not found"
-        return compass.get_outline(max_depth)
+
+        # Create a simple outline from document nodes
+        outline = []
+
+        def build_outline(node: DocumentNode, depth: int = 0) -> None:
+            if depth > max_depth:
+                return
+
+            if node.type == "heading" and node.title:
+                indent = "  " * (depth - 1) if depth > 0 else ""
+                outline.append(f"{indent}#{node.id} - {node.title}")
+
+            for child in node.children:
+                build_outline(child, depth + 1 if node.type == "heading" else depth)
+
+        if document.root:
+            build_outline(document.root)
+
+        return "\n".join(outline)
 
     def read_section(self, doc_id: str, section_id: str) -> str:
         """Read specified section content."""
-        compass = self.get_document(doc_id)
-        if not compass:
+        document = self.get_document(doc_id)
+        if not document:
             return f"Document '{doc_id}' not found"
-        return compass.get_section(section_id)
+
+        # Get the node and return its content with subsections
+        node = document.get_node(section_id)
+        if not node:
+            return f"Section '{section_id}' not found"
+
+        content = [node.content] if node.content else []
+
+        def collect_content(n: DocumentNode) -> None:
+            for child in n.children:
+                if child.content:
+                    content.append(child.content)
+                collect_content(child)
+
+        collect_content(node)
+        return "\n".join(content)
 
     def search_document(self, doc_id: str, query: str) -> str:
         """Search document and return formatted results."""
-        compass = self.get_document(doc_id)
-        if not compass:
+        document = self.get_document(doc_id)
+        if not document:
             return f"Document '{doc_id}' not found"
 
-        results = compass.search(query)
+        # Perform search using document's search functionality
+        results = []
+        query_lower = query.lower()
+
+        def search_node(node: DocumentNode) -> None:
+            if query_lower in node.content.lower():
+                # Find nearest heading as context
+                parent = node.parent
+                while parent and parent.type != "heading":
+                    parent = parent.parent
+
+                section_title = parent.title if parent else "Document Root"
+
+                from .models import SearchResult
+
+                results.append(
+                    SearchResult(
+                        node_id=node.id,
+                        section=section_title,
+                        section_id=parent.id if parent else "root",
+                        content=node.content,
+                        type=node.type,
+                        line_number=node.attributes.get("line_number"),
+                    )
+                )
+
+            for child in node.children:
+                search_node(child)
+
+        if document.root:
+            search_node(document.root)
+
         if not results:
             return f"No results found for '{query}'"
 
@@ -654,40 +921,55 @@ class DocumentNavigator:
 
     def navigate(self, doc_id: str, section_id: str) -> str:
         """Get navigation context as formatted string."""
-        compass = self.get_document(doc_id)
-        if not compass:
+        document = self.get_document(doc_id)
+        if not document:
             return f"Document '{doc_id}' not found"
 
-        try:
-            context = compass.get_navigation_context(section_id)
-        except ValueError as e:
-            return str(e)
+        node = document.get_node(section_id)
+        if not node:
+            return f"Section '{section_id}' not found"
 
-        output = f"Current: {context.current['title']}\n"
+        output = f"Current: {node.title or node.id}\n"
 
-        if context.breadcrumbs:
-            breadcrumb_path = " > ".join([b["title"] for b in context.breadcrumbs])
-            output += f"Path: {breadcrumb_path} > {context.current['title']}\n"
+        # Build breadcrumbs
+        ancestors = []
+        current = node.parent
+        while current and current.type != "document":
+            if current.type == "heading":
+                ancestors.append(current)
+            current = current.parent
 
-        if context.parent:
-            output += f"Parent: {context.parent['title']}\n"
+        if ancestors:
+            breadcrumb_path = " > ".join([a.title for a in reversed(ancestors)])
+            output += f"Path: {breadcrumb_path} > {node.title or node.id}\n"
 
-        if context.siblings:
-            output += "Siblings:\n"
-            for sibling in context.siblings:
-                marker = "→ " if sibling["is_current"] else "  "
-                output += f"{marker}{sibling['title']} (#{sibling['id']})\n"
+        # Find parent
+        if node.parent and node.parent.type == "heading":
+            output += f"Parent: {node.parent.title}\n"
 
-        if context.children:
+        # Find siblings (same level headings)
+        if node.parent:
+            siblings = [
+                child for child in node.parent.children if child.type == "heading"
+            ]
+            if len(siblings) > 1:
+                output += "Siblings:\n"
+                for sibling in siblings:
+                    marker = "→ " if sibling.id == node.id else "  "
+                    output += f"{marker}{sibling.title} (#{sibling.id})\n"
+
+        # Find children (direct child headings)
+        children = [child for child in node.children if child.type == "heading"]
+        if children:
             output += "Subsections:\n"
-            for child in context.children:
-                output += f"  {child['title']} (#{child['id']})\n"
+            for child in children:
+                output += f"  {child.title} (#{child.id})\n"
 
         return output
 
     def get_document_tokens(
         self, doc_id: str, encoding_name: str = "cl100k_base"
-    ) -> Dict[str, int]:
+    ) -> Optional[Dict[str, int]]:
         """Get token statistics for a document.
 
         Args:
@@ -697,11 +979,18 @@ class DocumentNavigator:
         Returns:
             Dictionary with token statistics or None if document not found
         """
-        compass = self.get_document(doc_id)
-        if not compass:
+        document = self.get_document(doc_id)
+        if not document:
             return None
 
+        try:
+            encoding = tiktoken.get_encoding(encoding_name)
+            total_tokens = len(encoding.encode(document.source_text))
+        except Exception:
+            # Fallback to simple word-based estimation if tiktoken fails
+            words = len(document.source_text.split())
+            total_tokens = int(words / 0.75)
+
         return {
-            "total_tokens": compass.get_total_tokens(encoding_name),
-            # "content_tokens": compass.get_content_tokens(encoding_name)
+            "total_tokens": total_tokens,
         }

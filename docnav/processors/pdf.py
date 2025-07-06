@@ -1,33 +1,35 @@
-"""Markdown document processor with DocumentNode tree structure support."""
+"""PDF document processor using pymupdf4llm for DocumentNode tree structure."""
 
 import re
 from pathlib import Path
 from typing import List, Optional
 
+import pymupdf4llm
+
 from ..models import Document, DocumentNode, SearchResult
 from .base import BaseProcessor
 
 
-class MarkdownProcessor(BaseProcessor):
-    """Processor for Markdown documents using DocumentNode tree structure.
+class PDFProcessor(BaseProcessor):
+    """Processor for PDF documents using pymupdf4llm and DocumentNode tree structure.
 
-    Provides comprehensive Markdown parsing that creates a DOM-like tree
+    Converts PDF documents to Markdown format and then parses into DOM-like tree
     structure for efficient navigation and content extraction.
     """
 
     def can_process(self, file_path: Path) -> bool:
-        """Check if this processor can handle Markdown files."""
-        return file_path.suffix.lower() in {".md", ".markdown", ".mdown", ".mkd"}
+        """Check if this processor can handle PDF files."""
+        return file_path.suffix.lower() == ".pdf"
 
     def get_supported_extensions(self) -> List[str]:
         """Get supported file extensions."""
-        return [".md", ".markdown", ".mdown", ".mkd"]
+        return [".pdf"]
 
     async def process(self, file_path: Path) -> Document:
-        """Process a Markdown document into DocumentNode tree structure.
+        """Process a PDF document into DocumentNode tree structure.
 
         Args:
-            file_path: Path to the Markdown file
+            file_path: Path to the PDF file
 
         Returns:
             Document with populated DocumentNode tree
@@ -35,18 +37,19 @@ class MarkdownProcessor(BaseProcessor):
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        content = file_path.read_text(encoding="utf-8")
+        # Convert PDF to markdown using pymupdf4llm
+        markdown_content = pymupdf4llm.to_markdown(str(file_path))
 
         # Create document with tree structure
         document = Document(
             file_path=file_path,
             title=file_path.stem,
-            source_text=content,
-            source_format="markdown",
+            source_text=markdown_content,
+            source_format="pdf",
         )
 
-        # Parse content into tree structure
-        root = self._parse_markdown_to_tree(content)
+        # Parse markdown content into tree structure
+        root = self._parse_markdown_to_tree(markdown_content)
         document.root = root
         document.rebuild_index()
 
@@ -106,9 +109,9 @@ class MarkdownProcessor(BaseProcessor):
                     content=line,
                     attributes={
                         "line_number": line_num,
-                        "list_type": "ordered"
-                        if re.match(r"^\s*\d+\.", line)
-                        else "unordered",
+                        "list_type": (
+                            "ordered" if re.match(r"^\s*\d+\.", line) else "unordered"
+                        ),
                     },
                 )
                 current_parents[-1].add_child(list_node)
@@ -143,7 +146,7 @@ class MarkdownProcessor(BaseProcessor):
         return document.get_node(node_id)
 
     async def search(self, document: Document, query: str) -> List[SearchResult]:
-        """Search for content within the Markdown document tree.
+        """Search for content within the PDF document tree.
 
         Args:
             document: Document to search within
@@ -182,34 +185,6 @@ class MarkdownProcessor(BaseProcessor):
             search_node(document.root)
 
         return results
-
-    def extract_metadata(self, content: str) -> dict:
-        """Extract metadata from Markdown frontmatter if present.
-
-        Args:
-            content: Markdown content
-
-        Returns:
-            Dictionary with extracted metadata
-        """
-        metadata = {}
-
-        # Check for YAML frontmatter
-        if content.startswith("---\n"):
-            try:
-                end_index = content.find("\n---\n", 4)
-                if end_index > 0:
-                    frontmatter = content[4:end_index]
-                    # Simple YAML parsing for common cases
-                    for line in frontmatter.split("\n"):
-                        if ":" in line:
-                            key, value = line.split(":", 1)
-                            metadata[key.strip()] = value.strip()
-            except Exception:
-                # If frontmatter parsing fails, continue without metadata
-                pass
-
-        return metadata
 
     def get_heading_hierarchy(self, document: Document) -> List[dict]:
         """Get hierarchical structure of headings in the document.
