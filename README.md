@@ -1,5 +1,8 @@
 # DocNav MCP Server
 
+[![License](https://img.shields.io/github/license/shenyimings/DocNav-MCP)](https://github.com/shenyimings/DocNav-MCP/blob/main/LICENSE) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![smithery badge](https://smithery.ai/badge/@shenyimings/docnav-mcp)](https://smithery.ai/server/@shenyimings/docnav-mcp)
+
+
 DocNav is a Model Context Protocol (MCP) server which empowers LLM Agents to read, analyze, and manage lengthy documents intelligently, mimicking human-like comprehension and navigation capabilities.
 
 ## Features
