@@ -69,12 +69,37 @@ uv run server.py
 
 ### Available Tools
 
-The server provides the following MCP tools:
+- `load_document`: Load a document for navigation and analysis
+    - Args: `file_path` (path to document file)
+    - Returns: Success message with auto-generated document ID
 
-- `load_document`: Load and process a document for navigation
-- `get_outline`: Get the document outline/table of contents
-- `read_section`: Retrieve content from a specific document section
-- `search_document`: Search for content within a document
+- `get_outline`: Get document outline/table of contents
+    - Args: `doc_id` (document identifier), `max_depth` (max heading depth, default 3)
+    - Returns: Formatted document outline
+    - Tip: Use first after loading a document to understand structure
+
+- `read_section`: Read content of a specific document section
+    - Args: `doc_id` (document identifier), `section_id` (e.g., 'h1_0', 'h2_1')
+    - Returns: Section content with subsections
+
+- `search_document`: Search for specific content within a document
+    - Args: `doc_id` (document identifier), `query` (search term or phrase)
+    - Returns: Formatted search results with context
+
+- `navigate_section`: Get navigation context for a section
+    - Args: `doc_id` (document identifier), `section_id` (section to navigate to)
+    - Returns: Navigation context with parent, siblings, children
+
+- `list_documents`: List all currently loaded documents
+    - Returns: List of loaded documents with metadata
+
+- `get_document_stats`: Get statistics about a loaded document
+    - Args: `doc_id` (document identifier)
+    - Returns: Document statistics and structure info
+
+- `remove_document`: Remove a document from the navigator
+    - Args: `doc_id` (document identifier)
+    - Returns: Success or error message
 
 ### Example Usage
 
